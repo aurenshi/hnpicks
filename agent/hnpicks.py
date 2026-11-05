@@ -740,7 +740,10 @@ def main():
     elif cmd == "loop":
         try:  # 先生成一版网站，避免首轮抓取期间网站是空白 404
             con = db()
-            build_site(con, select_picks(con), {"updated_at": now_ts(), "caught_up": False, **db_stats(con)})
+            horizon = now_ts() - int((INTERVAL_HOURS + 1) * 3600)  # 追平后游标最多落后一个更新间隔
+            caught = con.execute("SELECT COUNT(*) FROM crawl_state").fetchone()[0] > 0 and \
+                all(r[0] >= horizon for r in con.execute("SELECT cursor_ts FROM crawl_state"))
+            build_site(con, select_picks(con), {"updated_at": now_ts(), "caught_up": caught, **db_stats(con)})
             con.close()
         except Exception:  # noqa: BLE001
             log.exception("初始网站生成失败")
