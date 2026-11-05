@@ -1,0 +1,592 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{SITE_TITLE}}</title>
+<meta name="description" content="从 Hacker News 近二十年的评论里，筛出被多位用户、跨越多个月份反复推荐的视频。无需登录，偏好只保存在你的浏览器里。">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23ff6a00'/%3E%3Cpath d='M12 9l12 7-12 7z' fill='white'/%3E%3C/svg%3E">
+<style>
+:root{
+  --bg:#ffffff; --bg2:#f2f2f2; --bg3:#e5e5e5; --ink:#0f0f0f; --muted:#606060; --line:#e5e5e5;
+  --accent:#ff6a00; --overlay:rgba(0,0,0,.8); --card-hover:#f2f2f2; --shadow:0 4px 24px rgba(0,0,0,.12);
+}
+:root[data-theme="dark"]{
+  --bg:#0f0f0f; --bg2:#272727; --bg3:#3f3f3f; --ink:#f1f1f1; --muted:#aaaaaa; --line:#303030;
+  --card-hover:#1f1f1f; --shadow:0 4px 24px rgba(0,0,0,.5);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0f0f0f; --bg2:#272727; --bg3:#3f3f3f; --ink:#f1f1f1; --muted:#aaaaaa; --line:#303030;
+    --card-hover:#1f1f1f; --shadow:0 4px 24px rgba(0,0,0,.5);
+  }
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink)}
+body{font:14px/1.45 Roboto,-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","Segoe UI",Arial,sans-serif}
+a{color:inherit;text-decoration:none}
+button{font:inherit;color:inherit}
+svg.i{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex:none}
+[hidden]{display:none!important}
+
+/* ---------- 顶栏 ---------- */
+.top{position:fixed;inset:0 0 auto 0;height:56px;display:flex;align-items:center;gap:8px;padding:0 16px;background:var(--bg);z-index:30}
+.iconbtn{width:40px;height:40px;border:0;border-radius:50%;background:transparent;display:grid;place-items:center;cursor:pointer;flex:none}
+.iconbtn:hover{background:var(--bg2)}
+.logo{display:flex;align-items:center;gap:4px;font-weight:700;font-size:19px;letter-spacing:-.4px;padding:0 8px 0 4px;white-space:nowrap}
+.logo .mark{width:28px;height:20px;border-radius:5px;background:var(--accent);display:grid;place-items:center}
+.logo .mark::after{content:"";border-left:8px solid #fff;border-top:5px solid transparent;border-bottom:5px solid transparent;margin-left:2px}
+.logo b{color:var(--accent)}
+.search{flex:0 1 640px;min-width:0;margin:0 auto;display:flex;height:40px}
+.search input{flex:1;min-width:0;border:1px solid var(--bg3);border-right:0;border-radius:20px 0 0 20px;padding:0 16px;font:inherit;font-size:16px;background:var(--bg);color:var(--ink);outline:none}
+.search input:focus{border-color:#1c62b9}
+.search button{width:64px;border:1px solid var(--bg3);border-radius:0 20px 20px 0;background:var(--bg2);cursor:pointer;display:grid;place-items:center}
+.right{display:flex;gap:4px}
+
+/* ---------- 侧栏 ---------- */
+.side{position:fixed;top:56px;bottom:0;left:0;width:228px;padding:4px 12px 24px;overflow-y:auto;background:var(--bg);z-index:25;scrollbar-width:thin}
+.side a{display:flex;align-items:center;gap:22px;height:40px;padding:0 12px;border-radius:10px;font-size:14.5px}
+.side a:hover{background:var(--bg2)}
+.side a.on{background:var(--bg2);font-weight:600}
+.side hr{border:0;border-top:1px solid var(--line);margin:12px 0}
+.side .small{color:var(--muted);font-size:12px;padding:8px 12px;line-height:1.6}
+.scrim{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:24}
+main{margin-left:228px;padding:56px 24px 40px;min-height:100vh}
+body.collapsed .side{display:none} body.collapsed main{margin-left:0}
+
+/* ---------- 筛选与分类条 ---------- */
+.bar{position:sticky;top:56px;background:var(--bg);z-index:10;display:flex;gap:12px;align-items:center;padding:12px 0}
+.chips{display:flex;gap:12px;overflow-x:auto;scrollbar-width:none;flex:1;min-width:0}
+.chips::-webkit-scrollbar{display:none}
+.chip{border:0;border-radius:8px;background:var(--bg2);padding:6px 12px;white-space:nowrap;cursor:pointer;font-size:14px;font-weight:500}
+.chip:hover{background:var(--bg3)}
+.chip.on{background:var(--ink);color:var(--bg)}
+.fbtn{display:flex;align-items:center;gap:8px;border:0;border-radius:18px;background:var(--bg2);padding:7px 14px;cursor:pointer;font-weight:500;flex:none}
+.fbtn:hover{background:var(--bg3)}
+.fbtn .dot{width:7px;height:7px;border-radius:50%;background:var(--accent)}
+.panel{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:4px 24px;padding:4px 0 18px;border-bottom:1px solid var(--line);margin-bottom:8px}
+.panel h4{font-size:12px;text-transform:uppercase;letter-spacing:.04em;margin:8px 0 6px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+.panel button{display:block;border:0;background:none;padding:6px 0;cursor:pointer;color:var(--muted);text-align:left}
+.panel button.on{color:var(--ink);font-weight:600}
+.panel button:disabled{opacity:.4;cursor:not-allowed}
+.panel .note{font-size:12px;color:var(--muted);grid-column:1/-1}
+.pagehead{display:flex;align-items:baseline;gap:12px;margin:20px 0 4px}
+.pagehead h2{font-size:22px;margin:0}
+.pagehead span{color:var(--muted)}
+.pagehead button{margin-left:auto}
+.ghost{border:0;background:var(--bg2);border-radius:18px;padding:7px 14px;cursor:pointer}
+.ghost:hover{background:var(--bg3)}
+
+/* ---------- 视频卡片 ---------- */
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:40px 16px;padding-top:8px}
+.vc{display:flex;flex-direction:column;gap:12px;min-width:0}
+.th{position:relative;aspect-ratio:16/9;border-radius:12px;overflow:hidden;background:var(--bg2);display:block}
+.th img{width:100%;height:100%;object-fit:cover;display:block;transition:transform .2s;color:transparent}
+.vc:hover .th img{transform:scale(1.02)}
+.dur{position:absolute;right:8px;bottom:8px;background:var(--overlay);color:#fff;font-size:12px;font-weight:600;padding:1px 5px;border-radius:4px;font-variant-numeric:tabular-nums}
+.seenbar{position:absolute;left:0;right:0;bottom:0;height:4px;background:var(--accent)}
+.tw{position:absolute;inset:0;padding:16px 18px;background:#15202b;color:#e7e9ea;font-size:14px;line-height:1.5;overflow:hidden;display:flex;flex-direction:column;gap:8px}
+.tw .xl{font-weight:800;font-size:18px}
+.tw p{margin:0;display:-webkit-box;-webkit-line-clamp:5;-webkit-box-orient:vertical;overflow:hidden}
+.vt{font-size:16px;font-weight:600;line-height:22px;margin:0;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.vm{color:var(--muted);font-size:14px;line-height:20px;margin-top:4px}
+.vm .hn{color:var(--accent);font-weight:500}
+.sentinel{height:1px}
+.empty{color:var(--muted);text-align:center;padding:80px 0;font-size:15px}
+.banner{background:var(--bg2);border-radius:12px;padding:12px 16px;margin:16px 0 0;color:var(--muted);font-size:13px}
+.banner b{color:var(--ink)}
+
+/* ---------- 播放页 ---------- */
+.watch{display:grid;grid-template-columns:minmax(0,1fr) 402px;gap:24px;padding-top:24px;max-width:1750px}
+.player{position:relative;aspect-ratio:16/9;border-radius:12px;overflow:hidden;background:#000}
+.player iframe{width:100%;height:100%;border:0;display:block}
+.player .poster{position:absolute;inset:0;display:grid;place-items:center;background:#000 center/cover no-repeat;color:#fff}
+.player .poster span{background:var(--overlay);padding:10px 18px;border-radius:24px;font-weight:600;display:flex;gap:8px;align-items:center}
+.player .tw{font-size:20px;padding:32px}
+.player .tw p{-webkit-line-clamp:12}
+.wt{font-size:20px;font-weight:700;line-height:28px;margin:12px 0 2px}
+.wo{color:var(--muted);font-size:13px;margin:0 0 8px}
+.wrow{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;justify-content:space-between;margin:8px 0 12px}
+.wch{font-weight:600;font-size:16px}
+.acts{display:flex;gap:8px;flex-wrap:wrap}
+.pill{display:inline-flex;align-items:center;gap:6px;height:36px;border:0;border-radius:18px;background:var(--bg2);padding:0 14px;cursor:pointer;font-weight:500;font-size:14px}
+.pill:hover{background:var(--bg3)}
+.pill.on{background:var(--ink);color:var(--bg)}
+.pill svg.i{width:20px;height:20px}
+.desc{background:var(--bg2);border-radius:12px;padding:12px;font-size:14px}
+.desc .st{font-weight:600}
+.desc p{margin:8px 0 0;white-space:pre-line}
+.desc .tags{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.desc .tags a{color:#3ea6ff}
+:root:not([data-theme="dark"]) .desc .tags a{color:#065fd4}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .desc .tags a{color:#3ea6ff}}
+.quotes h3{font-size:18px;margin:24px 0 12px}
+.qt{display:flex;gap:12px;margin-bottom:18px}
+.av{width:36px;height:36px;border-radius:50%;flex:none;display:grid;place-items:center;font-weight:700;color:#fff;font-size:14px}
+.qt .who{font-size:13px;font-weight:600}
+.qt .who span{color:var(--muted);font-weight:400;margin-left:6px}
+.qt .who a:hover{text-decoration:underline}
+.qt p{margin:3px 0 0;font-size:14px;line-height:20px;word-break:break-word}
+.rel{display:flex;flex-direction:column;gap:8px}
+.rel h3{font-size:16px;margin:0 0 4px}
+.rc{display:grid;grid-template-columns:168px minmax(0,1fr);gap:8px}
+.rc .th{border-radius:8px}
+.rc .dur{font-size:11px;right:4px;bottom:4px}
+.rc .vt{font-size:14px;line-height:20px}
+.rc .vm{font-size:12px;line-height:18px;margin-top:2px}
+
+/* ---------- 分类页 / 设置 ---------- */
+.cats{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px;margin-top:16px}
+.cat{background:var(--bg2);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:2px}
+.cat:hover{background:var(--bg3)}
+.cat b{font-size:16px}
+.cat span{color:var(--muted);font-size:13px}
+.cloud{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.cloud a{background:var(--bg2);border-radius:8px;padding:5px 10px;font-size:13.5px}
+.cloud a:hover{background:var(--bg3)}
+.cloud small{color:var(--muted);margin-left:4px}
+.set{max-width:720px}
+.set section{border-bottom:1px solid var(--line);padding:18px 0}
+.set h3{margin:0 0 4px;font-size:16px}
+.set p{margin:0 0 10px;color:var(--muted)}
+.seg{display:inline-flex;background:var(--bg2);border-radius:10px;padding:3px}
+.seg button{border:0;background:none;padding:6px 14px;border-radius:8px;cursor:pointer}
+.seg button.on{background:var(--bg);box-shadow:0 1px 3px rgba(0,0,0,.15);font-weight:600}
+.kv{display:grid;grid-template-columns:max-content 1fr;gap:4px 18px;font-size:13.5px}
+.kv dt{color:var(--muted)} .kv dd{margin:0}
+
+/* ---------- 弹窗 / 提示 ---------- */
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:50;display:grid;place-items:center;padding:16px}
+.modal .box{background:var(--bg);border-radius:14px;max-width:560px;width:100%;max-height:85vh;overflow:auto;padding:22px 24px;box-shadow:var(--shadow)}
+.modal h2{margin:0 0 10px;font-size:20px}
+.modal p{color:var(--muted);margin:8px 0}
+.modal table{border-collapse:collapse;width:100%;margin-top:6px}
+.modal td{padding:5px 0;border-bottom:1px solid var(--line)}
+kbd{background:var(--bg2);border:1px solid var(--bg3);border-bottom-width:2px;border-radius:5px;padding:1px 7px;font:12px ui-monospace,Menlo,monospace}
+.toast{position:fixed;left:16px;bottom:16px;background:var(--ink);color:var(--bg);padding:12px 16px;border-radius:8px;z-index:60;box-shadow:var(--shadow)}
+
+/* ---------- 响应式 ---------- */
+@media (max-width:1300px){ .watch{grid-template-columns:minmax(0,1fr) 340px} .rc{grid-template-columns:140px minmax(0,1fr)} }
+@media (max-width:1100px){
+  .side{display:none;box-shadow:var(--shadow)} body.drawer .side{display:block}
+  main{margin-left:0} .watch{grid-template-columns:1fr}
+  .panel{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media (max-width:640px){
+  .top{padding:0 8px;gap:4px} .logo span.word{display:none}
+  .search{flex:1 1 auto} .search input{padding:0 12px} .search button{width:44px} main{padding:56px 16px 40px}
+  .grid{grid-template-columns:1fr;gap:28px}
+  .rc{grid-template-columns:150px minmax(0,1fr)}
+  .right .hide-s{display:none}
+}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-menu" viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18"/></symbol>
+  <symbol id="i-home" viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5V21h-6v-6H9v6H3z"/></symbol>
+  <symbol id="i-long" viewBox="0 0 24 24"><rect x="2.5" y="5" width="19" height="14" rx="2.5"/><path d="M10 9.2v5.6l4.6-2.8z"/></symbol>
+  <symbol id="i-trend" viewBox="0 0 24 24"><path d="M3 17l6-6 4 4 8-8M15 7h6v6"/></symbol>
+  <symbol id="i-like" viewBox="0 0 24 24"><path d="M7 10v11H3V10zM7 10l4-7c1.3 0 2.6 1 2.3 2.6L12.6 10H19a2 2 0 0 1 2 2.3l-1.3 7A2 2 0 0 1 17.7 21H7"/></symbol>
+  <symbol id="i-hist" viewBox="0 0 24 24"><path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1L3.5 8.5M3.5 3.5v5h5M12 7.5V12l3 2"/></symbol>
+  <symbol id="i-later" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.2 2"/></symbol>
+  <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.5"/></symbol>
+  <symbol id="i-set" viewBox="0 0 24 24"><path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M20 20l-4.8-4.8"/></symbol>
+  <symbol id="i-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.6 9.3a2.5 2.5 0 1 1 3.4 2.3c-.6.3-1 .8-1 1.5v.6M12 17h.01"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20.5 13.5A8.5 8.5 0 1 1 10.5 3.5a6.8 6.8 0 0 0 10 10z"/></symbol>
+  <symbol id="i-filter" viewBox="0 0 24 24"><path d="M4 6h16M7 12h10M10 18h4"/></symbol>
+  <symbol id="i-ext" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9M18 14v6H4V6h6"/></symbol>
+  <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.5v15l12-7.5z" fill="currentColor"/></symbol>
+</svg>
+
+<header class="top">
+  <button class="iconbtn" id="menuBtn" aria-label="菜单"><svg class="i"><use href="#i-menu"/></svg></button>
+  <a class="logo" href="#/" aria-label="首页"><span class="mark"></span><span class="word">HN<b>Picks</b></span></a>
+  <form class="search" id="searchForm" role="search">
+    <input id="q" type="search" placeholder="搜索" autocomplete="off" aria-label="搜索">
+    <button aria-label="搜索"><svg class="i"><use href="#i-search"/></svg></button>
+  </form>
+  <div class="right">
+    <button class="iconbtn hide-s" id="helpBtn" aria-label="帮助"><svg class="i"><use href="#i-help"/></svg></button>
+    <button class="iconbtn" id="themeBtn" aria-label="切换深色模式"><svg class="i"><use href="#i-moon"/></svg></button>
+  </div>
+</header>
+
+<nav class="side" id="side">
+  <a href="#/" data-r="home"><svg class="i"><use href="#i-home"/></svg>首页</a>
+  <a href="#/longs" data-r="longs"><svg class="i"><use href="#i-long"/></svg>长视频</a>
+  <a href="#/recent" data-r="recent"><svg class="i"><use href="#i-trend"/></svg>最近被推荐</a>
+  <hr>
+  <a href="#/liked" data-r="liked"><svg class="i"><use href="#i-like"/></svg>赞过</a>
+  <a href="#/history" data-r="history"><svg class="i"><use href="#i-hist"/></svg>历史</a>
+  <a href="#/later" data-r="later"><svg class="i"><use href="#i-later"/></svg>稍后观看</a>
+  <hr>
+  <a href="#/topics" data-r="topics"><svg class="i"><use href="#i-grid"/></svg>分类</a>
+  <a href="#/settings" data-r="settings"><svg class="i"><use href="#i-set"/></svg>设置</a>
+  <hr>
+  <div class="small" id="sideNote"></div>
+</nav>
+<div class="scrim" id="scrim" hidden></div>
+
+<main id="view"><div class="empty">加载中…</div></main>
+<div class="modal" id="help" hidden></div>
+<div class="toast" id="toast" hidden></div>
+
+<script>
+(() => {
+'use strict';
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const ICON = n => `<svg class="i"><use href="#i-${n}"/></svg>`;
+
+/* ---------------- 本地状态（只存在浏览器里） ---------------- */
+const KEY = 'hnpicks.v2';
+const S = (() => { try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch { return {}; } })();
+S.liked ||= {}; S.later ||= {}; S.history ||= {};
+S.theme ||= 'auto'; S.lang ||= 'zh'; if (S.hideWatched === undefined) S.hideWatched = true;
+S.f ||= {};
+const save = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch {} };
+const applyTheme = () => { if (S.theme === 'auto') document.documentElement.removeAttribute('data-theme'); else document.documentElement.dataset.theme = S.theme; };
+applyTheme();
+
+/* ---------------- 数据 ---------------- */
+let DATA = [], BY = new Map(), META = {}, STATUS = {}, HAS_DUR = false, HAS_PUB = false;
+const shardCache = new Map();
+const shard = n => {
+  if (!shardCache.has(n)) shardCache.set(n, fetch(`d/${String(n).padStart(2,'0')}.json`, {cache:'no-cache'}).then(r => r.json()).catch(() => ({})));
+  return shardCache.get(n);
+};
+const now = () => Date.now() / 1000;
+
+/* ---------------- 格式化 ---------------- */
+const fmtDur = s => { if (!s) return ''; const h = Math.floor(s/3600), m = Math.floor(s%3600/60), x = String(s%60).padStart(2,'0'); return h ? `${h}:${String(m).padStart(2,'0')}:${x}` : `${m}:${x}`; };
+const fmtViews = v => v == null ? '' : v < 1e4 ? `${v}次观看` : v < 1e8 ? `${+(v/1e4).toFixed(v<1e5?1:0)}万次观看` : `${+(v/1e8).toFixed(1)}亿次观看`;
+const fmtAgo = ts => { if (!ts) return ''; const d = (now()-ts)/86400; if (d < 1) return '今天'; if (d < 30) return `${Math.floor(d)}天前`; if (d < 365) return `${Math.floor(d/30)}个月前`; return `${Math.floor(d/365)}年前`; };
+const ym = ts => { const d = new Date(ts*1000); return `${d.getFullYear()}.${String(d.getMonth()+1).padStart(2,'0')}`; };
+const title = it => (S.lang === 'zh' && it.tz) ? it.tz : (it.t || it.tz || (it.kd === 'x' ? (it.tx || 'X 帖子').slice(0,60) : '（标题未获取）'));
+const altTitle = it => (S.lang === 'zh' && it.tz && it.t && it.t !== it.tz) ? it.t : (S.lang !== 'zh' && it.tz && it.tz !== it.t ? it.tz : '');
+const chan = it => it.ch || (it.h ? '@' + it.h : (it.kd === 'x' ? 'X' : ''));
+const thumb = it => `https://i.ytimg.com/vi/${it.id}/hq2.jpg`;     // 视频中段的代表帧
+const thumbFallback = it => `https://i.ytimg.com/vi/${it.id}/hqdefault.jpg`;
+const url = it => it.kd === 'y' ? `https://www.youtube.com/watch?v=${it.id}` : `https://x.com/${it.h || 'i'}/status/${it.id}`;
+const metaLine = it => [fmtViews(it.v), fmtAgo(it.p)].filter(Boolean).join(' • ');
+const hue = s => { let h = 0; for (const c of s) h = (h*31 + c.charCodeAt(0)) % 360; return h; };
+
+/* ---------------- 「为你推荐」排序 ---------------- */
+function prefs(){
+  const w = {c:{}, t:{}, ch:{}};
+  const add = (k, x) => { const it = BY.get(k); if (!it) return; w.c[it.c] = (w.c[it.c]||0)+x; (it.tp||[]).forEach(t => w.t[t] = (w.t[t]||0)+x); if (it.ch) w.ch[it.ch] = (w.ch[it.ch]||0)+x; };
+  Object.keys(S.liked).forEach(k => add(k, 3));
+  Object.keys(S.later).forEach(k => add(k, 1));
+  Object.keys(S.history).forEach(k => add(k, 1));
+  return w;
+}
+function rand(seed){ let h = 2166136261; for (const c of seed) { h ^= c.charCodeAt(0); h = Math.imul(h, 16777619); } return ((h >>> 0) % 10000) / 10000; }
+function forYou(list){
+  const w = prefs(), day = new Date().toISOString().slice(0,10);
+  const scored = list.map(it => {
+    const aff = 0.5*Math.log1p(w.c[it.c]||0) + 0.7*Math.log1p((it.tp||[]).reduce((a,t) => a + (w.t[t]||0), 0)) + 0.8*Math.log1p(w.ch[it.ch]||0);
+    return [it, Math.log1p(it.na) + 0.35*Math.log1p(it.nm) + aff + 0.9*rand(day + it.k)];
+  }).sort((a,b) => b[1]-a[1]).map(x => x[0]);
+  // 同一频道在前面不扎堆：每个频道先出现最多 2 次，多的往后放
+  const seen = {}, head = [], tail = [];
+  for (const it of scored) { const c = it.ch || it.k; seen[c] = (seen[c]||0)+1; (seen[c] <= 2 ? head : tail).push(it); }
+  return head.concat(tail);
+}
+
+/* ---------------- 筛选 ---------------- */
+const F = {
+  up:   {label:'上传时间', opts:[['any','不限'],['1y','一年内'],['5y','五年内'],['10y','十年内'],['old','十年以前']]},
+  dur:  {label:'时长', opts:[['any','不限'],['s','4 分钟以内'],['m','4–20 分钟'],['l','20 分钟以上']]},
+  kind: {label:'类型', opts:[['any','全部'],['y','视频'],['x','X 帖子']]},
+  rec:  {label:'HN 推荐', opts:[['any','不限'],['5','5 人以上'],['10','10 人以上'],['30','30 人以上']]},
+  sort: {label:'排序依据', opts:[['foryou','为你推荐'],['most','推荐人数最多'],['span','推荐时间跨度最长'],['recent','最近被推荐'],['new','上传日期'],['views','播放量']]},
+};
+const fv = k => S.f[k] || F[k].opts[0][0];
+function applyFilters(list, {skipSort} = {}){
+  const t = now(), up = fv('up'), dur = fv('dur'), kind = fv('kind'), rec = +fv('rec') || 0;
+  let out = list.filter(it => {
+    if (kind !== 'any' && it.kd !== kind) return false;
+    if (rec && it.na < rec) return false;
+    if (up !== 'any' && HAS_PUB) {
+      if (!it.p) return false;
+      const age = (t - it.p) / 31557600;
+      if (up === '1y' && age > 1 || up === '5y' && age > 5 || up === '10y' && age > 10 || up === 'old' && age <= 10) return false;
+    }
+    if (dur !== 'any' && HAS_DUR) {
+      if (!it.d) return false;
+      if (dur === 's' && it.d >= 240 || dur === 'm' && (it.d < 240 || it.d > 1200) || dur === 'l' && it.d <= 1200) return false;
+    }
+    return true;
+  });
+  return skipSort ? out : sortBy(out, fv('sort'));
+}
+function sortBy(list, how){
+  const by = {
+    most: (a,b) => b.na - a.na || b.s - a.s,
+    span: (a,b) => (b.l-b.f) - (a.l-a.f),
+    recent: (a,b) => b.l - a.l,
+    new: (a,b) => (b.p||0) - (a.p||0),
+    views: (a,b) => (b.v||0) - (a.v||0),
+  }[how];
+  return by ? list.slice().sort(by) : forYou(list);
+}
+
+/* ---------------- 卡片 ---------------- */
+function card(it, compact){
+  const watched = S.history[it.k];
+  const media = it.kd === 'y'
+    ? `<img loading="lazy" alt="" src="${thumb(it)}" data-fb="${thumbFallback(it)}">${it.d ? `<span class="dur">${fmtDur(it.d)}</span>` : ''}`
+    : `<div class="tw"><span class="xl">𝕏</span><p>${esc(it.tx || '点击查看原帖')}</p></div>`;
+  const alt = altTitle(it);
+  return `<div class="${compact ? 'rc' : 'vc'}">
+    <a class="th" href="#/watch/${encodeURIComponent(it.k)}">${media}${watched ? '<span class="seenbar"></span>' : ''}</a>
+    <div>
+      <a href="#/watch/${encodeURIComponent(it.k)}"><h3 class="vt" title="${esc(alt || title(it))}">${esc(title(it))}</h3></a>
+      <div class="vm">${esc(chan(it))}${metaLine(it) ? `<br>${metaLine(it)}` : ''}<br><span class="hn">${it.na} 位 HN 用户推荐</span> · 跨 ${it.nm} 个月</div>
+    </div></div>`;
+}
+document.addEventListener('error', e => { const img = e.target; if (img.tagName !== 'IMG' || !img.dataset.fb) return; if (img.src !== img.dataset.fb) img.src = img.dataset.fb; else img.style.visibility = 'hidden'; }, true);
+// hq2.jpg 不存在时 YouTube 会返回 120×90 的灰色占位图，同样换成默认封面
+document.addEventListener('load', e => { const img = e.target; if (img.tagName === 'IMG' && img.dataset.fb && img.naturalWidth === 120 && img.src !== img.dataset.fb) img.src = img.dataset.fb; }, true);
+
+/* ---------------- 无限滚动列表 ---------------- */
+let io;
+function mountList(container, list, {compact = false, page = 36} = {}){
+  let n = 0;
+  if (io) io.disconnect();
+  const sentinel = document.createElement('div'); sentinel.className = 'sentinel';
+  const more = () => { container.insertAdjacentHTML('beforeend', list.slice(n, n + page).map(it => card(it, compact)).join('')); n += page; if (n >= list.length) io.disconnect(); };
+  io = new IntersectionObserver(es => es.some(e => e.isIntersecting) && more(), {rootMargin: '1200px'});
+  container.after(sentinel); more(); io.observe(sentinel);
+}
+
+/* ---------------- 页面 ---------------- */
+const V = $('#view');
+function filterPanel(){
+  const active = Object.keys(F).some(k => k !== 'sort' && fv(k) !== F[k].opts[0][0]);
+  const col = k => `<div><h4>${F[k].label}</h4>${F[k].opts.map(([v,l]) => {
+    const dis = (k === 'dur' && !HAS_DUR && v !== 'any') || (k === 'up' && !HAS_PUB && v !== 'any') || ((k === 'sort') && ((v === 'new' && !HAS_PUB) || (v === 'views' && !HAS_DUR)));
+    return `<button data-f="${k}" data-v="${v}" class="${fv(k) === v ? 'on' : ''}" ${dis ? 'disabled title="需要配置 YouTube API key"' : ''}>${l}</button>`;
+  }).join('')}</div>`;
+  return {active, html: `<div class="panel" id="panel" hidden>${Object.keys(F).map(col).join('')}
+    ${(!HAS_DUR || !HAS_PUB) ? '<div class="note">时长、上传时间、播放量需要服务器配置 YOUTUBE_API_KEY 后才有数据。</div>' : ''}
+    ${active ? '<div class="note"><button data-f="reset" style="color:var(--accent)">清除筛选</button></div>' : ''}</div>`};
+}
+function listPage({head = '', chips = false, base, cat = '全部', emptyText = '没有符合条件的视频', compactSort}){
+  const fp = filterPanel();
+  let pool = base;
+  const cats = {};
+  if (chips) pool.forEach(it => cats[it.c] = (cats[it.c]||0)+1);
+  const shown = applyFilters(cat === '全部' ? pool : pool.filter(it => it.c === cat || (it.tp||[]).includes(cat)), compactSort ? {skipSort:true} : {});
+  if (compactSort) shown.sort(compactSort);
+  V.innerHTML = `${head}
+    <div class="bar">
+      <div class="chips">${chips ? ['全部', ...Object.keys(cats).sort((a,b) => cats[b]-cats[a])].map(c => `<button class="chip ${c === cat ? 'on' : ''}" data-cat="${esc(c)}">${esc(c)}</button>`).join('') : `<span style="color:var(--muted)">${shown.length.toLocaleString()} 个视频</span>`}</div>
+      <button class="fbtn" id="fbtn">${ICON('filter')}筛选${fp.active ? '<span class="dot"></span>' : ''}</button>
+    </div>${fp.html}
+    ${shown.length ? '<div class="grid" id="grid"></div>' : `<div class="empty">${emptyText}</div>`}`;
+  if (shown.length) mountList($('#grid'), shown);
+  $('#fbtn').onclick = () => $('#panel').hidden = !$('#panel').hidden;
+  V.querySelectorAll('[data-cat]').forEach(b => b.onclick = () => { S.cat = b.dataset.cat; save(); route(); });
+  V.querySelectorAll('[data-f]').forEach(b => b.onclick = () => {
+    if (b.dataset.f === 'reset') S.f = {sort: S.f.sort}; else S.f[b.dataset.f] = b.dataset.v;
+    save(); route(); $('#panel').hidden = false;
+  });
+}
+const backlogBanner = () => {
+  const bits = [];
+  if (STATUS.caught_up === false) bits.push(`正在回溯 HN 历史评论（已到 <b>${esc(STATUS.crawl_cursor)}</b>）`);
+  if (STATUS.enrich_backlog > 0) bits.push(`还有 <b>${STATUS.enrich_backlog.toLocaleString()}</b> 个视频在补标题和时长`);
+  if (STATUS.classify_backlog > 0) bits.push(`还有 <b>${STATUS.classify_backlog.toLocaleString()}</b> 个视频在分类`);
+  return bits.length ? `<div class="banner">Agent 正在后台工作：${bits.join('；')}。内容会越来越完整。</div>` : '';
+};
+
+const pages = {
+  home(){
+    const base = S.hideWatched ? DATA.filter(it => !S.history[it.k]) : DATA;
+    listPage({head: backlogBanner(), chips: true, base, cat: S.cat || '全部'});
+  },
+  longs(){
+    if (!HAS_DUR) { V.innerHTML = `<div class="pagehead"><h2>长视频</h2></div><div class="empty">需要服务器配置 YOUTUBE_API_KEY 才能拿到视频时长。<br>配好后这里会列出 20 分钟以上的演讲、讲座和纪录片。</div>`; return; }
+    listPage({head: `<div class="pagehead"><h2>长视频</h2><span>20 分钟以上</span></div>`, base: DATA.filter(it => it.d > 1200)});
+  },
+  recent(){
+    listPage({head: `<div class="pagehead"><h2>最近被推荐</h2><span>HN 上最近又有人提起的</span></div>`, base: DATA, compactSort: (a,b) => b.l - a.l});
+  },
+  liked(){ savedPage('赞过', 'liked', '还没有赞过的视频。在视频页点「赞」，「为你推荐」会更懂你。'); },
+  later(){ savedPage('稍后观看', 'later', '还没有添加。在视频页点「稍后观看」。'); },
+  history(){ savedPage('观看历史', 'history', '还没有看过的视频。'); },
+  topics(){
+    const cats = {}, tps = {};
+    DATA.forEach(it => { cats[it.c] = (cats[it.c]||0)+1; (it.tp||[]).forEach(t => tps[t] = (tps[t]||0)+1); });
+    const tlist = Object.entries(tps).sort((a,b) => b[1]-a[1]);
+    V.innerHTML = `<div class="pagehead"><h2>分类</h2><span>${Object.keys(cats).length} 个大类 · ${tlist.length} 个主题</span></div>
+      <div class="cats">${Object.entries(cats).sort((a,b) => b[1]-a[1]).map(([c,n]) => `<a class="cat" href="#/c/${encodeURIComponent(c)}"><b>${esc(c)}</b><span>${n.toLocaleString()} 个视频</span></a>`).join('')}</div>
+      ${tlist.length ? `<div class="pagehead"><h2 style="font-size:18px">主题</h2></div><div class="cloud">${tlist.filter(([,n]) => n >= 2).map(([t,n]) => `<a href="#/t/${encodeURIComponent(t)}">${esc(t)}<small>${n}</small></a>`).join('')}</div>`
+        : '<div class="banner">细分主题需要服务器配置 DEEPSEEK_API_KEY，配好后由 DeepSeek 自动给每个视频打主题标签。</div>'}`;
+  },
+  c(name){ listPage({head: `<div class="pagehead"><h2>${esc(name)}</h2></div>`, base: DATA.filter(it => it.c === name)}); },
+  t(name){ listPage({head: `<div class="pagehead"><h2># ${esc(name)}</h2></div>`, base: DATA.filter(it => (it.tp||[]).includes(name))}); },
+  search(q){
+    $('#q').value = q;
+    const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
+    const base = DATA.filter(it => { const t = it._s; return terms.every(x => t.includes(x)); });
+    listPage({head: `<div class="pagehead"><h2>“${esc(q)}”</h2><span>${base.length} 个结果</span></div>`, base, emptyText: '没有找到相关视频，换个关键词试试'});
+  },
+  settings(){
+    const seg = (key, opts) => `<div class="seg">${opts.map(([v,l]) => `<button data-s="${key}" data-v="${v}" class="${String(S[key]) === v ? 'on' : ''}">${l}</button>`).join('')}</div>`;
+    V.innerHTML = `<div class="set">
+      <div class="pagehead"><h2>设置</h2></div>
+      <section><h3>外观</h3><p>深色模式也可以按 <kbd>t</kbd> 切换。</p>${seg('theme', [['auto','跟随系统'],['light','浅色'],['dark','深色']])}</section>
+      <section><h3>标题语言</h3><p>中文标题由 DeepSeek 翻译，原标题会显示在视频页。</p>${seg('lang', [['zh','中文优先'],['orig','原标题']])}</section>
+      <section><h3>首页隐藏看过的视频</h3><p>看过的视频不再出现在首页推荐里（「历史」里还能找到）。</p>${seg('hideWatched', [['true','隐藏'],['false','显示']])}</section>
+      <section><h3>我的数据</h3><p>赞过、历史、稍后观看都只保存在这个浏览器里，没有账号、不上传。可以导出备份，换设备时再导入。</p>
+        <div class="acts"><button class="pill" id="exp">导出</button><button class="pill" id="imp">导入</button><button class="pill" id="clr">清空全部</button></div>
+        <input type="file" id="impFile" accept="application/json" hidden></section>
+      <section><h3>数据集</h3><p>整个网站的数据都是公开的静态文件，可以下载给自己的 AI 做二次分析。</p>
+        <div class="acts"><a class="pill" href="data.json" download>${ICON('ext')}视频列表 data.json</a><a class="pill" href="status.json" target="_blank">${ICON('ext')}运行状态 status.json</a></div></section>
+      <section><h3>关于</h3><dl class="kv">
+        <dt>入选规则</dt><dd>≥${META.min_authors} 位不同 HN 用户 · ≥${META.min_months} 个不同月份</dd>
+        <dt>入选视频</dt><dd>${DATA.length.toLocaleString()}</dd>
+        <dt>分析的提及</dt><dd>${(STATUS.mentions||0).toLocaleString()} 次</dd>
+        <dt>视频元数据</dt><dd>${STATUS.youtube_api ? 'YouTube Data API' : 'oEmbed（未配置 YouTube API key，没有时长和播放量）'}</dd>
+        <dt>分类方式</dt><dd>${esc(STATUS.classifier || '—')}</dd>
+        <dt>上次更新</dt><dd>${STATUS.updated_at ? new Date(STATUS.updated_at*1000).toLocaleString() : '—'}</dd>
+      </dl></section></div>`;
+    V.querySelectorAll('[data-s]').forEach(b => b.onclick = () => {
+      const k = b.dataset.s, v = b.dataset.v; S[k] = v === 'true' ? true : v === 'false' ? false : v; save(); applyTheme(); route();
+    });
+    $('#exp').onclick = () => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify({liked:S.liked, later:S.later, history:S.history}, null, 1)], {type:'application/json'})); a.download = 'hnpicks-我的数据.json'; a.click(); };
+    $('#imp').onclick = () => $('#impFile').click();
+    $('#impFile').onchange = async e => { try { const d = JSON.parse(await e.target.files[0].text()); ['liked','later','history'].forEach(k => Object.assign(S[k], d[k] || {})); save(); toast('已导入'); } catch { toast('文件格式不对'); } };
+    $('#clr').onclick = () => { if (confirm('清空赞过、历史和稍后观看？')) { S.liked = {}; S.later = {}; S.history = {}; save(); toast('已清空'); } };
+  },
+  async watch(key){
+    const it = BY.get(key);
+    if (!it) { V.innerHTML = '<div class="empty">这个视频不在列表里了</div>'; return; }
+    S.history[key] = Math.floor(now()); save();
+    document.title = title(it) + ' - HNPicks';
+    const alt = altTitle(it);
+    const player = it.kd === 'x'
+      ? `<a class="tw" href="${url(it)}" target="_blank" rel="noopener"><span class="xl">𝕏 ${esc(chan(it))}</span><p>${esc(it.tx || '在 X 上查看原帖')}</p></a>`
+      : it.e === 0
+        ? `<a class="poster" href="${url(it)}" target="_blank" rel="noopener" style="background-image:url('${thumbFallback(it)}')"><span>${ICON('play')}作者不允许站外播放，去 YouTube 观看</span></a>`
+        : `<iframe src="https://www.youtube-nocookie.com/embed/${it.id}?autoplay=1&rel=0" title="${esc(title(it))}" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>`;
+    const pill = (id, icon, label, on) => `<button class="pill ${on ? 'on' : ''}" id="${id}">${ICON(icon)}${label}</button>`;
+    V.innerHTML = `<div class="watch">
+      <div>
+        <div class="player">${player}</div>
+        <h1 class="wt">${esc(title(it))}</h1>${alt ? `<p class="wo">${esc(alt)}</p>` : ''}
+        <div class="wrow"><div><div class="wch">${esc(chan(it))}</div><div class="vm" style="margin:0">${[metaLine(it), it.d ? fmtDur(it.d) : ''].filter(Boolean).join(' • ')}</div></div>
+          <div class="acts">${pill('likeBtn','like', S.liked[key] ? '已赞' : '赞', S.liked[key])}${pill('laterBtn','later', S.later[key] ? '已加入稍后观看' : '稍后观看', S.later[key])}
+            <a class="pill" href="${url(it)}" target="_blank" rel="noopener">${ICON('ext')}${it.kd === 'y' ? 'YouTube' : 'X'}</a>${pill('copyBtn','link','复制链接')}</div></div>
+        <div class="desc" id="desc"><div class="st">${it.na} 位 HN 用户在 ${it.nm} 个不同月份推荐过 · 首次 ${ym(it.f)} · 最近 ${ym(it.l)}</div></div>
+        <div class="quotes" id="quotes"></div>
+      </div>
+      <aside class="rel" id="rel"><h3>相关推荐</h3></aside>
+    </div>`;
+    window.scrollTo(0, 0);
+    $('#likeBtn').onclick = () => { S.liked[key] ? delete S.liked[key] : S.liked[key] = Math.floor(now()); save(); route(); };
+    $('#laterBtn').onclick = () => { S.later[key] ? delete S.later[key] : S.later[key] = Math.floor(now()); save(); route(); };
+    $('#copyBtn').onclick = () => { navigator.clipboard?.writeText(location.href).then(() => toast('链接已复制'), () => toast(location.href)); };
+    // 相关推荐：同主题 > 同频道 > 同分类
+    const tp = new Set(it.tp || []);
+    const rel = DATA.filter(x => x.k !== key).map(x => [x, (x.tp||[]).filter(t => tp.has(t)).length*3 + (x.ch && x.ch === it.ch ? 2 : 0) + (x.c === it.c ? 1 : 0) + Math.log1p(x.na)*0.3])
+      .filter(([,s]) => s > 1).sort((a,b) => b[1]-a[1]).slice(0, 30).map(([x]) => x);
+    $('#rel').insertAdjacentHTML('beforeend', rel.map(x => card(x, true)).join('') || '<div class="vm">暂无</div>');
+    // 详情（推荐理由、HN 原话）按需加载
+    const d = (await shard(it.sh))[key] || {};
+    if (location.hash !== `#/watch/${encodeURIComponent(key)}`) return;
+    $('#desc').insertAdjacentHTML('beforeend',
+      (d.r ? `<p><b>推荐理由：</b>${esc(d.r)}</p>` : '') +
+      (d.ds ? `<p>${esc(d.ds)}${d.ds.length >= 400 ? '…' : ''}</p>` : '') +
+      ((it.tp||[]).length || it.c ? `<div class="tags">${[`<a href="#/c/${encodeURIComponent(it.c)}">${esc(it.c)}</a>`, ...(it.tp||[]).map(t => `<a href="#/t/${encodeURIComponent(t)}">#${esc(t)}</a>`)].join('')}</div>` : ''));
+    const qs = d.q || [];
+    $('#quotes').innerHTML = qs.length ? `<h3>HN 用户怎么说 · ${d.nmn || qs.length} 次提及</h3>` + qs.map(q => `<div class="qt">
+        <div class="av" style="background:hsl(${hue(q.author)} 55% 45%)">${esc(q.author[0].toUpperCase())}</div>
+        <div><div class="who"><a href="https://news.ycombinator.com/user?id=${encodeURIComponent(q.author)}" target="_blank" rel="noopener">${esc(q.author)}</a><span><a href="https://news.ycombinator.com/item?id=${esc(q.hn_id)}" target="_blank" rel="noopener">${ym(q.ts)}${q.story_title ? ' · ' + esc(q.story_title) : ''}</a></span></div>
+        <p>${esc(q.text)}</p></div></div>`).join('') : '';
+  },
+};
+function savedPage(name, key, emptyText){
+  const list = Object.entries(S[key]).sort((a,b) => b[1]-a[1]).map(([k]) => BY.get(k)).filter(Boolean);
+  V.innerHTML = `<div class="pagehead"><h2>${name}</h2><span>${list.length} 个</span>${list.length ? `<button class="ghost" id="clearList">清空</button>` : ''}</div>
+    ${list.length ? '<div class="grid" id="grid"></div>' : `<div class="empty">${emptyText}</div>`}`;
+  if (list.length) {
+    mountList($('#grid'), list);
+    $('#clearList').onclick = () => { if (confirm(`清空「${name}」？`)) { S[key] = {}; save(); route(); } };
+  }
+}
+
+/* ---------------- 路由 ---------------- */
+function route(){
+  const [, r = '', arg = ''] = location.hash.match(/^#\/([^/]*)\/?(.*)$/) || [];
+  const name = r || 'home', a = decodeURIComponent(arg);
+  document.querySelectorAll('.side a').forEach(x => x.classList.toggle('on', x.dataset.r === name));
+  document.body.classList.toggle('collapsed', name === 'watch' && innerWidth > 1100 && !document.body.classList.contains('pinned'));
+  closeDrawer();
+  if (io) io.disconnect();
+  document.querySelectorAll('.sentinel').forEach(x => x.remove());
+  (pages[name] || pages.home)(a);
+  if (name !== 'watch') document.title = $('title').dataset.base;
+}
+const closeDrawer = () => { document.body.classList.remove('drawer'); $('#scrim').hidden = true; };
+$('#menuBtn').onclick = () => {
+  if (innerWidth > 1100) { document.body.classList.toggle('collapsed'); document.body.classList.toggle('pinned', !document.body.classList.contains('collapsed')); }
+  else { document.body.classList.add('drawer'); $('#scrim').hidden = false; }
+};
+$('#scrim').onclick = closeDrawer;
+$('#searchForm').onsubmit = e => { e.preventDefault(); const q = $('#q').value.trim(); location.hash = q ? `#/search/${encodeURIComponent(q)}` : '#/'; };
+$('#themeBtn').onclick = () => { const dark = matchMedia('(prefers-color-scheme: dark)').matches; const cur = S.theme === 'auto' ? (dark ? 'dark' : 'light') : S.theme; S.theme = cur === 'dark' ? 'light' : 'dark'; save(); applyTheme(); };
+
+let toastT;
+function toast(msg){ const t = $('#toast'); t.textContent = msg; t.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => t.hidden = true, 2200); }
+function showHelp(){
+  const m = $('#help');
+  m.innerHTML = `<div class="box"><h2>这是什么？</h2>
+    <p>我们读遍了 Hacker News 近二十年的评论，只留下被 <b>≥${META.min_authors} 位不同用户</b>、在 <b>≥${META.min_months} 个不同月份</b>反复推荐过的视频。经得起时间检验的东西，不用再赌推荐算法。</p>
+    <p>不用登录。「为你推荐」会根据你赞过、看过、想看的视频调整排序，这些偏好只保存在你的浏览器里。封面用的是视频中段的画面，而不是精心设计的点击诱饵。</p>
+    <p>数据由服务器上的 Agent 自动抓取、筛选、分类，每 ${STATUS.interval_hours || 6} 小时更新一次。</p>
+    <h2 style="font-size:16px;margin-top:18px">快捷键</h2>
+    <table><tr><td><kbd>/</kbd></td><td>搜索</td></tr><tr><td><kbd>t</kbd></td><td>切换深色模式</td></tr>
+    <tr><td><kbd>l</kbd></td><td>赞（视频页）</td></tr><tr><td><kbd>w</kbd></td><td>稍后观看（视频页）</td></tr>
+    <tr><td><kbd>Esc</kbd></td><td>关闭 / 返回</td></tr><tr><td><kbd>?</kbd></td><td>显示本帮助</td></tr></table>
+    <p style="text-align:right;margin-top:16px"><button class="pill" id="closeHelp">知道了</button></p></div>`;
+  m.hidden = false;
+  $('#closeHelp').onclick = () => m.hidden = true;
+}
+$('#help').onclick = e => { if (e.target.id === 'help') e.target.hidden = true; };
+$('#helpBtn').onclick = showHelp;
+document.addEventListener('keydown', e => {
+  if (e.target.matches('input,textarea') || e.metaKey || e.ctrlKey || e.altKey) { if (e.key === 'Escape') e.target.blur(); return; }
+  if (e.key === '/') { e.preventDefault(); $('#q').focus(); }
+  else if (e.key === 't') $('#themeBtn').click();
+  else if (e.key === '?') showHelp();
+  else if (e.key === 'l') $('#likeBtn')?.click();
+  else if (e.key === 'w') $('#laterBtn')?.click();
+  else if (e.key === 'Escape') { if (!$('#help').hidden) $('#help').hidden = true; else if (location.hash.startsWith('#/watch/')) history.back(); }
+});
+window.addEventListener('hashchange', route);
+
+/* ---------------- 启动 ---------------- */
+$('title').dataset.base = document.title;
+Promise.all([
+  fetch('data.json', {cache:'no-cache'}).then(r => r.json()),
+  fetch('status.json', {cache:'no-cache'}).then(r => r.json()).catch(() => ({})),
+]).then(([data, st]) => {
+  META = data; STATUS = st;
+  DATA = data.items.map(it => ({...it, _s: [it.t, it.tz, it.ch, it.c, it.h, it.tx, ...(it.tp||[])].join(' ').toLowerCase()}));
+  DATA.forEach(it => BY.set(it.k, it));
+  HAS_DUR = DATA.some(it => it.d); HAS_PUB = DATA.some(it => it.p);
+  $('#sideNote').innerHTML = `${DATA.length.toLocaleString()} 个被 HN 反复推荐的视频<br>数据更新于 ${st.updated_at ? fmtAgo(st.updated_at).replace('今天', '今天') : '—'}<br><a href="javascript:void 0" id="sideHelp" style="text-decoration:underline">这是什么？</a>`;
+  $('#sideHelp').onclick = showHelp;
+  route();
+  try { if (!localStorage.getItem('hnpicks.helped')) { showHelp(); localStorage.setItem('hnpicks.helped', '1'); } } catch {}
+}).catch(err => { V.innerHTML = `<div class="empty">数据加载失败：${esc(err)}</div>`; });
+})();
+</script>
+</body>
+</html>

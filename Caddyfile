@@ -1,0 +1,8 @@
+# SITE_ADDRESS 默认是 :80（用 IP 访问）。绑定域名后在 .env 里改成域名，Caddy 会自动申请 HTTPS 证书。
+{$SITE_ADDRESS}
+
+root * /site
+encode gzip
+file_server
+header /data.json Cache-Control "no-cache"
+header /status.json Cache-Control "no-cache"

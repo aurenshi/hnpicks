@@ -1,0 +1,25 @@
+services:
+  agent:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./data:/data
+      - ./site:/site
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+  web:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - SITE_ADDRESS=${SITE_ADDRESS:-:80}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./site:/site:ro
+      - caddy_data:/data
+volumes:
+  caddy_data:
