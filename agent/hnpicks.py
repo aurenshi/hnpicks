@@ -3,7 +3,8 @@
 HNPicks Agent —— 从 Hacker News 历年评论中，筛出被「反复、长期、多人」推荐的 YouTube 视频和 X 帖子。
 
 流程（每轮循环）:
-  1. crawl    : 通过 HN Algolia 公开 API 增量抓取提到 youtube / x.com / twitter 的评论和帖子
+  1. crawl    : 通过 HN Algolia 公开 API 增量抓取提到 youtube / x.com / twitter 的评论和帖子；
+                Lobsters、Reddit 见 sources.py（都只用官方接口）
   2. extract  : 从评论正文里抽取视频 ID / 推文 ID，记录「谁、何时」推荐了它
   3. select   : 筛选 —— 至少 MIN_AUTHORS 个不同的人、在 MIN_MONTHS 个不同的月份推荐过
   4. enrich   : 配了 YOUTUBE_API_KEY 用 YouTube Data API 补标题/频道/时长/播放量/上传时间；否则用 oEmbed（只有标题和频道）
@@ -52,7 +53,9 @@ REQ_PER_CYCLE = int(ENV("REQ_PER_CYCLE", "600"))    # 回溯阶段每轮最多�
 ENRICH_PER_CYCLE = int(ENV("ENRICH_PER_CYCLE", "3000"))  # 有 YouTube API key 时每轮最多补多少条
 OEMBED_PER_CYCLE = int(ENV("OEMBED_PER_CYCLE", "600"))   # 没有 key、走 oEmbed 时每轮最多补多少条
 CLASSIFY_PER_CYCLE = int(ENV("CLASSIFY_PER_CYCLE", "1000"))
-CLASSIFY_WORKERS = int(ENV("CLASSIFY_WORKERS", "5"))     # 同时向 DeepSeek 发几个请求
+CLASSIFY_WORKERS = int(ENV("CLASSIFY_WORKERS", "5"))
+LOBSTERS_REQ_PER_CYCLE = int(ENV("LOBSTERS_REQ_PER_CYCLE", "300"))
+REDDIT_REQ_PER_CYCLE = int(ENV("REDDIT_REQ_PER_CYCLE", "400"))     # 同时向 DeepSeek 发几个请求
 DEEPSEEK_MODEL = ENV("DEEPSEEK_MODEL", "deepseek-chat")
 DEEPSEEK_BASE_URL = ENV("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
 SITE_TITLE = ENV("SITE_TITLE", "HNPicks · HN 反复安利的视频与帖子")
@@ -180,6 +183,7 @@ CREATE TABLE IF NOT EXISTS crawl_state (
   window_s INTEGER NOT NULL,
   PRIMARY KEY (query, tag)
 );
+CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT);
 CREATE TABLE IF NOT EXISTS runs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   started_at INTEGER, finished_at INTEGER,
@@ -203,11 +207,31 @@ def db() -> sqlite3.Connection:
                 # 旧版把「禁止嵌入」(401) 也当成了已删除，这里清掉旧结果重新检查
                 con.execute("UPDATE items SET enrich_status=NULL WHERE enrich_status IN ('dead','err')")
                 con.execute("UPDATE items SET enrich_src='oembed' WHERE enrich_status='ok'")
+    mcols = {r[1] for r in con.execute("PRAGMA table_info(mentions)")}
+    for col, typ in [("source", "TEXT NOT NULL DEFAULT 'hn'"), ("link", "TEXT")]:
+        if col not in mcols:
+            con.execute(f"ALTER TABLE mentions ADD COLUMN {col} {typ}")
     con.commit()
     return con
 
 
 # ----------------------------------------------------------------------------- 1+2. 抓取 & 抽取
+def add_mention(con: sqlite3.Connection, *, mid: str, key: str, meta: dict, author, ts: int, typ: str,
+                story_id=None, story_title=None, points=None, snippet: str = "", source: str = "hn", link=None) -> int:
+    """记录「某人在某时推荐了某个链接」。同一条帖子/评论里的同一个链接只记一次。返回 1=新增，0=已存在。"""
+    cur = con.execute(
+        "INSERT OR IGNORE INTO mentions(hn_id, item_key, author, created_at, hn_type, story_id, story_title, points, "
+        "snippet, source, link) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        (mid, key, author, int(ts or 0), typ, str(story_id or ""), story_title, points, (snippet or "")[:400], source, link))
+    if not cur.rowcount:
+        return 0
+    con.execute("INSERT OR IGNORE INTO items(item_key, kind, ext_id, handle) VALUES (?,?,?,?)",
+                (key, meta["kind"], meta["ext_id"], meta["handle"]))
+    if meta["handle"]:
+        con.execute("UPDATE items SET handle=? WHERE item_key=? AND handle IS NULL", (meta["handle"], key))
+    return 1
+
+
 def ingest_hits(con: sqlite3.Connection, hits: list[dict], tag: str) -> int:
     n = 0
     for h in hits:
@@ -220,19 +244,11 @@ def ingest_hits(con: sqlite3.Connection, hits: list[dict], tag: str) -> int:
             continue
         snippet = strip_html(h.get("comment_text") or h.get("title") or "")[:400]
         for key, meta in keys.items():
-            cur = con.execute(
-                "INSERT OR IGNORE INTO mentions VALUES (?,?,?,?,?,?,?,?,?)",
-                (str(h.get("objectID")), key, h.get("author"), int(h.get("created_at_i") or 0), tag,
-                 str(h.get("story_id") or h.get("objectID") or ""),
-                 h.get("story_title") or h.get("title"), h.get("points"), snippet),
-            )
-            if cur.rowcount:
-                n += 1
-                con.execute("INSERT OR IGNORE INTO items(item_key, kind, ext_id, handle) VALUES (?,?,?,?)",
-                            (key, meta["kind"], meta["ext_id"], meta["handle"]))
-                if meta["handle"]:
-                    con.execute("UPDATE items SET handle=? WHERE item_key=? AND handle IS NULL",
-                                (meta["handle"], key))
+            n += add_mention(con, mid=str(h.get("objectID")), key=key, meta=meta, author=h.get("author"),
+                             ts=int(h.get("created_at_i") or 0), typ=tag,
+                             story_id=h.get("story_id") or h.get("objectID"),
+                             story_title=h.get("story_title") or h.get("title"), points=h.get("points"),
+                             snippet=snippet, source="hn")
     return n
 
 
@@ -286,48 +302,56 @@ def crawl(con: sqlite3.Connection, budget: int) -> tuple[int, int, bool]:
 
 
 # ----------------------------------------------------------------------------- 3. 筛选
+SOURCES = ["hn", "lobsters", "reddit"]
+
+
 def select_picks(con: sqlite3.Connection) -> list[dict]:
     rows = con.execute(
-        "SELECT item_key, author, created_at, hn_id, hn_type, story_id, story_title, points, snippet "
-        "FROM mentions WHERE author IS NOT NULL ORDER BY created_at"
+        "SELECT item_key, author, created_at, hn_id, hn_type, story_title, points, snippet, source, link "
+        "FROM mentions WHERE author IS NOT NULL AND author != '' ORDER BY created_at"
     ).fetchall()
-    agg: dict[str, dict] = defaultdict(lambda: {"authors": set(), "months": set(), "mentions": []})
+    agg: dict[str, dict] = defaultdict(lambda: {"people": set(), "months": set(), "mentions": []})
     for r in rows:
         a = agg[r["item_key"]]
-        a["authors"].add(r["author"])
+        a["people"].add((r["source"], r["author"]))  # 不同站点的同名账号按不同的人算
         a["months"].add(datetime.fromtimestamp(r["created_at"], timezone.utc).strftime("%Y-%m"))
         a["mentions"].append(r)
     picks = []
     for key, a in agg.items():
-        if len(a["authors"]) < MIN_AUTHORS or len(a["months"]) < MIN_MONTHS:
+        if len(a["people"]) < MIN_AUTHORS or len(a["months"]) < MIN_MONTHS:
             continue
         ms = a["mentions"]
-        # 每个作者只取一条，作为「推荐语」样本；优先长一点的评论
+        # 推荐语样本：每人一条、优先长评论；先保证每个来源至少一条，再按长度补满 6 条
         seen, quotes = set(), []
-        for m in sorted(ms, key=lambda m: -len(m["snippet"] or "")):
-            if m["author"] in seen or not m["snippet"]:
-                continue
-            seen.add(m["author"])
-            quotes.append({"author": m["author"], "hn_id": m["hn_id"], "type": m["hn_type"],
-                           "ts": m["created_at"], "text": m["snippet"][:280],
-                           "story_title": m["story_title"]})
-            if len(quotes) >= 5:
-                break
+        ranked = sorted((m for m in ms if m["snippet"]), key=lambda m: -len(m["snippet"]))
+        for pass_ in (0, 1):
+            for m in ranked:
+                who = (m["source"], m["author"])
+                if who in seen or len(quotes) >= 6:
+                    continue
+                if pass_ == 0 and any(q["src"] == m["source"] for q in quotes):
+                    continue
+                seen.add(who)
+                quotes.append({"author": m["author"], "src": m["source"], "hn_id": m["hn_id"], "type": m["hn_type"],
+                               "link": m["link"], "ts": m["created_at"], "text": m["snippet"][:280],
+                               "story_title": m["story_title"]})
         quotes.sort(key=lambda q: q["ts"])
         years = {mo[:4] for mo in a["months"]}
+        per_src = [sum(1 for p in a["people"] if p[0] == src) for src in SOURCES]
         picks.append({
             "key": key,
-            "n_authors": len(a["authors"]),
+            "n_authors": len(a["people"]),
+            "by_source": per_src,
             "n_months": len(a["months"]),
             "n_years": len(years),
             "n_mentions": len(ms),
             "first": ms[0]["created_at"],
             "last": ms[-1]["created_at"],
-            "story_points": max([m["points"] or 0 for m in ms if m["hn_type"] == "story"] or [0]),
             "quotes": quotes,
         })
-    for p in picks:  # 综合分：人数为主，跨度越长越加分
-        p["score"] = round(p["n_authors"] + 0.5 * p["n_months"] + 1.0 * p["n_years"], 2)
+    for p in picks:  # 综合分：人数为主，跨度越长越加分，被多个站点独立推荐再加分
+        p["score"] = round(p["n_authors"] + 0.5 * p["n_months"] + 1.0 * p["n_years"]
+                           + 2.0 * (sum(1 for x in p["by_source"] if x) - 1), 2)
     picks.sort(key=lambda p: -p["score"])
     return picks
 
@@ -558,13 +582,13 @@ def classify(con: sqlite3.Connection, picks: list[dict], budget: int) -> tuple[i
     known = [t for t, _ in sorted(freq.items(), key=lambda x: -x[1])[:120]]
 
     system = (
-        "你是一个视频网站的内容编辑。用户会给你一个 JSON 数组，每一项都是在 Hacker News 上被多位用户、跨越多个月份反复推荐的 YouTube 视频或 X 帖子。"
-        "请根据标题、频道、简介、以及 HN 用户的推荐原话，为每项给出：\n"
+        "你是一个视频网站的内容编辑。用户会给你一个 JSON 数组，每一项都是在 Hacker News、Lobsters、Reddit 等技术社区被多位用户、跨越多个月份反复推荐的 YouTube 视频或 X 帖子。"
+        "请根据标题、频道、简介、以及社区用户的推荐原话，为每项给出：\n"
         f"- category：只能从这些大类中选一个：{'、'.join(CATEGORIES)}\n"
         "- topics：1~3 个中文细分主题标签（2~8 个字的名词短语，如「数字电路」「分布式系统」「宇宙学」「创业融资」）。"
         + (f"优先复用这些已有主题：{'、'.join(known)}。" if known else "") + "\n"
         "- title_zh：简洁自然的中文标题（不超过 30 字，人名、产品名等专有名词保留原文）\n"
-        "- reason_zh：一句话中文推荐理由（不超过 60 字），说清楚它为什么值得看，依据 HN 用户的评价，不要夸张、不要编造原话里没有的事实。\n"
+        "- reason_zh：一句话中文推荐理由（不超过 60 字），说清楚它为什么值得看，依据社区用户的评价，不要夸张、不要编造原话里没有的事实。\n"
         "key 原样返回，每一项都要输出。只输出 JSON，格式如下：\n"
         '{"items": [{"key": "yt:xxxxxxxxxxx", "category": "科学与数学", "topics": ["宇宙学"], "title_zh": "……", "reason_zh": "……"}]}'
     )
@@ -643,7 +667,7 @@ def build_site(con: sqlite3.Connection, picks: list[dict], status: dict) -> int:
             "p": it["published_at"], "d": it["duration_s"], "v": it["views"],
             "c": it["category"] or "其他", "tp": json.loads(it["topics"]) if it["topics"] else [],
             "na": p["n_authors"], "nm": p["n_months"], "f": p["first"], "l": p["last"], "s": p["score"],
-            "e": 0 if it["enrich_status"] == "noembed" else 1, "sh": sh,
+            "e": 0 if it["enrich_status"] == "noembed" else 1, "sh": sh, "sc": p["by_source"],
         }
         if it["kind"] == "x":
             rec["h"] = it["handle"]
@@ -683,9 +707,32 @@ def db_stats(con) -> dict:
 
 
 def run_cycle() -> tuple[bool, dict]:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import sources  # 同目录模块
     con = db()
     t0 = now_ts()
-    reqs, new, caught_up = crawl(con, REQ_PER_CYCLE)
+    me = sys.modules[__name__]
+    src_status, reqs, new, caught_up = {}, 0, 0, True
+    for name, fn, enabled in [
+        ("hn", lambda: crawl(con, REQ_PER_CYCLE), True),
+        ("lobsters", lambda: sources.crawl_lobsters(con, me, LOBSTERS_REQ_PER_CYCLE), sources.lobsters_enabled()),
+        ("reddit", lambda: sources.crawl_reddit(con, me, REDDIT_REQ_PER_CYCLE), sources.reddit_enabled()),
+    ]:
+        if not enabled:
+            src_status[name] = {"enabled": False}
+            continue
+        try:
+            r, n, cu = fn()
+            reqs += r
+            new += n
+            caught_up &= cu
+            src_status[name] = {"enabled": True, "requests": r, "new": n, "caught_up": cu}
+        except Exception as e:  # noqa: BLE001 —— 一个来源出错不影响其他来源和网站更新
+            con.commit()
+            log.exception("%s 抓取出错", name)
+            src_status[name] = {"enabled": True, "error": f"{type(e).__name__}: {str(e)[:200]}"}
+    for name in SOURCES:
+        src_status[name]["mentions"] = con.execute("SELECT COUNT(*) FROM mentions WHERE source=?", (name,)).fetchone()[0]
     picks = select_picks(con)
     keys = [p["key"] for p in picks]
     n_enriched, enrich_left = enrich(con, keys, ENRICH_PER_CYCLE)
@@ -694,7 +741,7 @@ def run_cycle() -> tuple[bool, dict]:
     status = {
         "updated_at": now_ts(), "caught_up": caught_up, "classifier": cls_mode,
         "rule": f"≥{MIN_AUTHORS} 位不同用户 · ≥{MIN_MONTHS} 个不同月份",
-        "enrich_backlog": enrich_left, "classify_backlog": cls_left,
+        "enrich_backlog": enrich_left, "classify_backlog": cls_left, "sources": src_status,
         **db_stats(con),
     }
     n_site = build_site(con, picks, status)
@@ -702,8 +749,10 @@ def run_cycle() -> tuple[bool, dict]:
                 (t0, now_ts(), reqs, new, n_site,
                  f"enriched={n_enriched} left={enrich_left} classified={n_cls} left={cls_left} {cls_mode}"))
     con.commit()
-    log.info("本轮完成: HN请求=%d 新提及=%d 入选=%d | 补元数据=%d 剩余=%d | 分类=%d 剩余=%d (%s) | 游标=%s 追平=%s",
-             reqs, new, n_site, n_enriched, enrich_left, n_cls, cls_left, cls_mode, status["crawl_cursor"], caught_up)
+    src_line = " ".join(f"{k}:{'关' if not v.get('enabled') else ('出错' if 'error' in v else ('+%d' % v['new']) + ('' if v['caught_up'] else '…'))}"
+                        for k, v in src_status.items())
+    log.info("本轮完成: 请求=%d 新提及=%d [%s] 入选=%d | 补元数据=%d 剩余=%d | 分类=%d 剩余=%d (%s) | HN游标=%s 追平=%s",
+             reqs, new, src_line, n_site, n_enriched, enrich_left, n_cls, cls_left, cls_mode, status["crawl_cursor"], caught_up)
     con.close()
     busy = (not caught_up) or enrich_left > 0 or (cls_left > 0 and n_cls > 0)
     return busy, status
@@ -717,6 +766,15 @@ def diag():
         ("YouTube oEmbed", lambda: http_json("https://www.youtube.com/oembed",
                                              {"url": f"https://www.youtube.com/watch?v={vid}", "format": "json"}, retries=0)["title"]),
     ]
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import sources
+    if sources.lobsters_enabled():
+        checks.append(("Lobsters", lambda: f"youtube.com 投稿第一页 {len(http_json(sources.LOBSTERS_BASE + '/domains/youtube.com.json', retries=0))} 条"))
+    if sources.reddit_enabled():
+        checks.append(("Reddit API", lambda: "r/" + sources.REDDIT_SUBS[0] + " 搜索到 " + str(len(sources.reddit_get(
+            f"/r/{sources.REDDIT_SUBS[0]}/search", {"q": "site:youtube.com", "restrict_sr": 1, "limit": 5})["data"]["children"])) + " 条"))
+    else:
+        checks.append(("Reddit API", lambda: "未配置 REDDIT_CLIENT_ID / REDDIT_CLIENT_SECRET（跳过 Reddit）"))
     if ENV("YOUTUBE_API_KEY"):
         checks.append(("YouTube Data API", lambda: http_json(YT_API, {"part": "snippet", "id": vid, "key": ENV("YOUTUBE_API_KEY")},
                                                              retries=0)["items"][0]["snippet"]["title"]))
@@ -748,6 +806,8 @@ def main():
     elif cmd == "stats":
         con = db()
         print(json.dumps(db_stats(con), ensure_ascii=False, indent=1))
+        for r in con.execute("SELECT source, COUNT(*) n, COUNT(DISTINCT author) people FROM mentions GROUP BY 1"):
+            print(dict(r))
         for r in con.execute("SELECT enrich_status, enrich_src, COUNT(*) n FROM items GROUP BY 1,2"):
             print(dict(r))
         for r in con.execute("SELECT * FROM runs ORDER BY id DESC LIMIT 5"):

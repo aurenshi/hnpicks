@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{SITE_TITLE}}</title>
-<meta name="description" content="从 Hacker News 近二十年的评论里，筛出被多位用户、跨越多个月份反复推荐的视频。无需登录，偏好只保存在你的浏览器里。">
+<meta name="description" content="从 Hacker News、Lobsters、Reddit 多年的讨论里，筛出被多位用户、跨越多个月份反复推荐的视频。无需登录，偏好只保存在你的浏览器里。">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23ff6a00'/%3E%3Cpath d='M12 9l12 7-12 7z' fill='white'/%3E%3C/svg%3E">
 <style>
 :root{
@@ -64,7 +64,7 @@ body.collapsed .side{display:none} body.collapsed main{margin-left:0}
 .fbtn{display:flex;align-items:center;gap:8px;border:0;border-radius:18px;background:var(--bg2);padding:7px 14px;cursor:pointer;font-weight:500;flex:none}
 .fbtn:hover{background:var(--bg3)}
 .fbtn .dot{width:7px;height:7px;border-radius:50%;background:var(--accent)}
-.panel{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:4px 24px;padding:4px 0 18px;border-bottom:1px solid var(--line);margin-bottom:8px}
+.panel{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:4px 24px;padding:4px 0 18px;border-bottom:1px solid var(--line);margin-bottom:8px}
 .panel h4{font-size:12px;text-transform:uppercase;letter-spacing:.04em;margin:8px 0 6px;padding-bottom:8px;border-bottom:1px solid var(--line)}
 .panel button{display:block;border:0;background:none;padding:6px 0;cursor:pointer;color:var(--muted);text-align:left}
 .panel button.on{color:var(--ink);font-weight:600}
@@ -125,6 +125,7 @@ body.collapsed .side{display:none} body.collapsed main{margin-left:0}
 .av{width:36px;height:36px;border-radius:50%;flex:none;display:grid;place-items:center;font-weight:700;color:#fff;font-size:14px}
 .qt .who{font-size:13px;font-weight:600}
 .qt .who span{color:var(--muted);font-weight:400;margin-left:6px}
+.qt .who span.sb{font-size:11px;background:var(--bg2);border-radius:4px;padding:1px 6px}
 .qt .who a:hover{text-decoration:underline}
 .qt p{margin:3px 0 0;font-size:14px;line-height:20px;word-break:break-word}
 .rel{display:flex;flex-direction:column;gap:8px}
@@ -272,6 +273,11 @@ const thumb = it => `https://i.ytimg.com/vi/${it.id}/hq2.jpg`;     // 视频中�
 const thumbFallback = it => `https://i.ytimg.com/vi/${it.id}/hqdefault.jpg`;
 const url = it => it.kd === 'y' ? `https://www.youtube.com/watch?v=${it.id}` : `https://x.com/${it.h || 'i'}/status/${it.id}`;
 const metaLine = it => [fmtViews(it.v), fmtAgo(it.p)].filter(Boolean).join(' • ');
+const SRC = [['hn','HN','#ff6600'],['lobsters','Lobsters','#ac130d'],['reddit','Reddit','#ff4500']];
+const srcName = k => (SRC.find(x => x[0] === k) || [k,k])[1];
+const srcLine = it => (it.sc || [it.na]).map((n,i) => n ? `${SRC[i][1]} ${n}` : '').filter(Boolean).join(' · ');
+const userUrl = q => q.src === 'lobsters' ? `https://lobste.rs/~${encodeURIComponent(q.author)}` : q.src === 'reddit' ? `https://www.reddit.com/user/${encodeURIComponent(q.author)}` : `https://news.ycombinator.com/user?id=${encodeURIComponent(q.author)}`;
+const quoteUrl = q => q.link || `https://news.ycombinator.com/item?id=${encodeURIComponent(q.hn_id)}`;
 const hue = s => { let h = 0; for (const c of s) h = (h*31 + c.charCodeAt(0)) % 360; return h; };
 
 /* ---------------- 「为你推荐」排序 ---------------- */
@@ -301,15 +307,19 @@ const F = {
   up:   {label:'上传时间', opts:[['any','不限'],['1y','一年内'],['5y','五年内'],['10y','十年内'],['old','十年以前']]},
   dur:  {label:'时长', opts:[['any','不限'],['s','4 分钟以内'],['m','4–20 分钟'],['l','20 分钟以上']]},
   kind: {label:'类型', opts:[['any','全部'],['y','视频'],['x','X 帖子']]},
-  rec:  {label:'HN 推荐', opts:[['any','不限'],['5','5 人以上'],['10','10 人以上'],['30','30 人以上']]},
+  rec:  {label:'推荐人数', opts:[['any','不限'],['10','10 人以上'],['30','30 人以上'],['multi','多个社区都推荐']]},
+  src:  {label:'来源社区', opts:[['any','全部'],['0','Hacker News'],['1','Lobsters'],['2','Reddit']]},
   sort: {label:'排序依据', opts:[['foryou','为你推荐'],['most','推荐人数最多'],['span','推荐时间跨度最长'],['recent','最近被推荐'],['new','上传日期'],['views','播放量']]},
 };
 const fv = k => S.f[k] || F[k].opts[0][0];
 function applyFilters(list, {skipSort} = {}){
-  const t = now(), up = fv('up'), dur = fv('dur'), kind = fv('kind'), rec = +fv('rec') || 0;
+  const t = now(), up = fv('up'), dur = fv('dur'), kind = fv('kind'), rec = +fv('rec') || 0, multi = fv('rec') === 'multi', src = fv('src');
   let out = list.filter(it => {
     if (kind !== 'any' && it.kd !== kind) return false;
     if (rec && it.na < rec) return false;
+    const sc = it.sc || [it.na, 0, 0];
+    if (multi && sc.filter(Boolean).length < 2) return false;
+    if (src !== 'any' && !sc[+src]) return false;
     if (up !== 'any' && HAS_PUB) {
       if (!it.p) return false;
       const age = (t - it.p) / 31557600;
@@ -345,7 +355,7 @@ function card(it, compact){
     <a class="th" href="#/watch/${encodeURIComponent(it.k)}">${media}${watched ? '<span class="seenbar"></span>' : ''}</a>
     <div>
       <a href="#/watch/${encodeURIComponent(it.k)}"><h3 class="vt" title="${esc(alt || title(it))}">${esc(title(it))}</h3></a>
-      <div class="vm">${esc(chan(it))}${metaLine(it) ? `<br>${metaLine(it)}` : ''}<br><span class="hn">${it.na} 位 HN 用户推荐</span> · 跨 ${it.nm} 个月</div>
+      <div class="vm">${esc(chan(it))}${metaLine(it) ? `<br>${metaLine(it)}` : ''}<br><span class="hn">${it.na} 人推荐</span> · 跨 ${it.nm} 个月</div>
     </div></div>`;
 }
 document.addEventListener('error', e => { const img = e.target; if (img.tagName !== 'IMG' || !img.dataset.fb) return; if (img.src !== img.dataset.fb) img.src = img.dataset.fb; else img.style.visibility = 'hidden'; }, true);
@@ -449,7 +459,8 @@ const pages = {
       <section><h3>数据集</h3><p>整个网站的数据都是公开的静态文件，可以下载给自己的 AI 做二次分析。</p>
         <div class="acts"><a class="pill" href="data.json" download>${ICON('ext')}视频列表 data.json</a><a class="pill" href="status.json" target="_blank">${ICON('ext')}运行状态 status.json</a></div></section>
       <section><h3>关于</h3><dl class="kv">
-        <dt>入选规则</dt><dd>≥${META.min_authors} 位不同 HN 用户 · ≥${META.min_months} 个不同月份</dd>
+        <dt>入选规则</dt><dd>≥${META.min_authors} 位不同用户 · ≥${META.min_months} 个不同月份（各社区人数合计，不同社区的同名账号算不同的人）</dd>
+        <dt>数据来源</dt><dd>${SRC.map(([k,n]) => { const x = (STATUS.sources||{})[k] || {}; return `${n}：${x.enabled === false ? '未启用' : (x.mentions||0).toLocaleString() + ' 次提及' + (x.error ? '（上轮出错）' : '')}`; }).join('<br>')}</dd>
         <dt>入选视频</dt><dd>${DATA.length.toLocaleString()}</dd>
         <dt>分析的提及</dt><dd>${(STATUS.mentions||0).toLocaleString()} 次</dd>
         <dt>视频元数据</dt><dd>${STATUS.youtube_api ? 'YouTube Data API' : 'oEmbed（未配置 YouTube API key，没有时长和播放量）'}</dd>
@@ -483,7 +494,7 @@ const pages = {
         <div class="wrow"><div><div class="wch">${esc(chan(it))}</div><div class="vm" style="margin:0">${[metaLine(it), it.d ? fmtDur(it.d) : ''].filter(Boolean).join(' • ')}</div></div>
           <div class="acts">${pill('likeBtn','like', S.liked[key] ? '已赞' : '赞', S.liked[key])}${pill('laterBtn','later', S.later[key] ? '已加入稍后观看' : '稍后观看', S.later[key])}
             <a class="pill" href="${url(it)}" target="_blank" rel="noopener">${ICON('ext')}${it.kd === 'y' ? 'YouTube' : 'X'}</a>${pill('copyBtn','link','复制链接')}</div></div>
-        <div class="desc" id="desc"><div class="st">${it.na} 位 HN 用户在 ${it.nm} 个不同月份推荐过 · 首次 ${ym(it.f)} · 最近 ${ym(it.l)}</div></div>
+        <div class="desc" id="desc"><div class="st">${it.na} 人在 ${it.nm} 个不同月份推荐过（${srcLine(it)}）· 首次 ${ym(it.f)} · 最近 ${ym(it.l)}</div></div>
         <div class="quotes" id="quotes"></div>
       </div>
       <aside class="rel" id="rel"><h3>相关推荐</h3></aside>
@@ -505,9 +516,9 @@ const pages = {
       (d.ds ? `<p>${esc(d.ds)}${d.ds.length >= 400 ? '…' : ''}</p>` : '') +
       ((it.tp||[]).length || it.c ? `<div class="tags">${[`<a href="#/c/${encodeURIComponent(it.c)}">${esc(it.c)}</a>`, ...(it.tp||[]).map(t => `<a href="#/t/${encodeURIComponent(t)}">#${esc(t)}</a>`)].join('')}</div>` : ''));
     const qs = d.q || [];
-    $('#quotes').innerHTML = qs.length ? `<h3>HN 用户怎么说 · ${d.nmn || qs.length} 次提及</h3>` + qs.map(q => `<div class="qt">
+    $('#quotes').innerHTML = qs.length ? `<h3>大家怎么说 · ${d.nmn || qs.length} 次提及</h3>` + qs.map(q => `<div class="qt">
         <div class="av" style="background:hsl(${hue(q.author)} 55% 45%)">${esc(q.author[0].toUpperCase())}</div>
-        <div><div class="who"><a href="https://news.ycombinator.com/user?id=${encodeURIComponent(q.author)}" target="_blank" rel="noopener">${esc(q.author)}</a><span><a href="https://news.ycombinator.com/item?id=${esc(q.hn_id)}" target="_blank" rel="noopener">${ym(q.ts)}${q.story_title ? ' · ' + esc(q.story_title) : ''}</a></span></div>
+        <div><div class="who"><a href="${userUrl(q)}" target="_blank" rel="noopener">${esc(q.author)}</a><span class="sb">${srcName(q.src || 'hn')}</span><span><a href="${quoteUrl(q)}" target="_blank" rel="noopener">${ym(q.ts)}${q.story_title ? ' · ' + esc(q.story_title) : ''}</a></span></div>
         <p>${esc(q.text)}</p></div></div>`).join('') : '';
   },
 };
@@ -547,7 +558,8 @@ function toast(msg){ const t = $('#toast'); t.textContent = msg; t.hidden = fals
 function showHelp(){
   const m = $('#help');
   m.innerHTML = `<div class="box"><h2>这是什么？</h2>
-    <p>我们读遍了 Hacker News 近二十年的评论，只留下被 <b>≥${META.min_authors} 位不同用户</b>、在 <b>≥${META.min_months} 个不同月份</b>反复推荐过的视频。经得起时间检验的东西，不用再赌推荐算法。</p>
+    <p>我们读遍了 Hacker News、Lobsters、Reddit 多年来的讨论（只用各站官方接口），只留下被 <b>≥${META.min_authors} 位不同用户</b>、在 <b>≥${META.min_months} 个不同月份</b>反复推荐过的视频。经得起时间检验的东西，不用再赌推荐算法。</p>
+    <p>作者给自己视频打广告、低赞帖子、机器人账号都不算推荐。被多个社区独立推荐的视频排名更靠前。</p>
     <p>不用登录。「为你推荐」会根据你赞过、看过、想看的视频调整排序，这些偏好只保存在你的浏览器里。封面用的是视频中段的画面，而不是精心设计的点击诱饵。</p>
     <p>数据由服务器上的 Agent 自动抓取、筛选、分类，每 ${STATUS.interval_hours || 6} 小时更新一次。</p>
     <h2 style="font-size:16px;margin-top:18px">快捷键</h2>
@@ -581,7 +593,7 @@ Promise.all([
   DATA = data.items.map(it => ({...it, _s: [it.t, it.tz, it.ch, it.c, it.h, it.tx, ...(it.tp||[])].join(' ').toLowerCase()}));
   DATA.forEach(it => BY.set(it.k, it));
   HAS_DUR = DATA.some(it => it.d); HAS_PUB = DATA.some(it => it.p);
-  $('#sideNote').innerHTML = `${DATA.length.toLocaleString()} 个被 HN 反复推荐的视频<br>数据更新于 ${st.updated_at ? fmtAgo(st.updated_at).replace('今天', '今天') : '—'}<br><a href="javascript:void 0" id="sideHelp" style="text-decoration:underline">这是什么？</a>`;
+  $('#sideNote').innerHTML = `${DATA.length.toLocaleString()} 个被反复推荐的视频<br>数据更新于 ${st.updated_at ? fmtAgo(st.updated_at).replace('今天', '今天') : '—'}<br><a href="javascript:void 0" id="sideHelp" style="text-decoration:underline">这是什么？</a>`;
   $('#sideHelp').onclick = showHelp;
   route();
   try { if (!localStorage.getItem('hnpicks.helped')) { showHelp(); localStorage.setItem('hnpicks.helped', '1'); } } catch {}
