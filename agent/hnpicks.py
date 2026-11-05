@@ -32,6 +32,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import zlib
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -50,7 +51,8 @@ BACKFILL_FROM = ENV("BACKFILL_FROM", "2007-01-01")  # 回溯起点
 REQ_PER_CYCLE = int(ENV("REQ_PER_CYCLE", "600"))    # 回溯阶段每轮最多请求 HN 多少次
 ENRICH_PER_CYCLE = int(ENV("ENRICH_PER_CYCLE", "3000"))  # 有 YouTube API key 时每轮最多补多少条
 OEMBED_PER_CYCLE = int(ENV("OEMBED_PER_CYCLE", "600"))   # 没有 key、走 oEmbed 时每轮最多补多少条
-CLASSIFY_PER_CYCLE = int(ENV("CLASSIFY_PER_CYCLE", "300"))
+CLASSIFY_PER_CYCLE = int(ENV("CLASSIFY_PER_CYCLE", "1000"))
+CLASSIFY_WORKERS = int(ENV("CLASSIFY_WORKERS", "5"))     # 同时向 DeepSeek 发几个请求
 DEEPSEEK_MODEL = ENV("DEEPSEEK_MODEL", "deepseek-chat")
 DEEPSEEK_BASE_URL = ENV("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
 SITE_TITLE = ENV("SITE_TITLE", "HNPicks · HN 反复安利的视频与帖子")
@@ -566,13 +568,11 @@ def classify(con: sqlite3.Connection, picks: list[dict], budget: int) -> tuple[i
         "key 原样返回，每一项都要输出。只输出 JSON，格式如下：\n"
         '{"items": [{"key": "yt:xxxxxxxxxxx", "category": "科学与数学", "topics": ["宇宙学"], "title_zh": "……", "reason_zh": "……"}]}'
     )
-    done = 0
-    for i in range(0, len(need), 20):
-        batch = need[i:i + 20]
-        payload = []
+    def make_payload(batch):  # 在主线程读数据库（sqlite 连接不跨线程）
+        out = []
         for p in batch:
             it = con.execute("SELECT * FROM items WHERE item_key=?", (p["key"],)).fetchone()
-            payload.append({
+            out.append({
                 "key": p["key"], "type": it["kind"], "title": it["title"], "channel": it["channel"],
                 "duration_min": round(it["duration_s"] / 60) if it["duration_s"] else None,
                 "description": (it["descr"] or "")[:300] or None,
@@ -580,31 +580,46 @@ def classify(con: sqlite3.Connection, picks: list[dict], budget: int) -> tuple[i
                 "hn_story_titles": list({q["story_title"] for q in p["quotes"] if q["story_title"]})[:3],
                 "hn_quotes": [q["text"][:240] for q in p["quotes"][:4]],
             })
-        try:
-            text = deepseek_chat(system, json.dumps(payload, ensure_ascii=False))
-            result = json.loads(text)["items"]
-        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
-            log.error("DeepSeek 返回无法解析: %s", e)
-            continue
-        except RuntimeError as e:
-            log.error("%s；本轮分类暂停", e)
-            for p in need:  # 先用规则兜底，网站不至于全是「其他」
-                rules_classify(con, p)
-            con.commit()
-            break
-        valid = {p["key"] for p in batch}
-        for r in result:
-            if not isinstance(r, dict) or r.get("key") not in valid:
+        return json.dumps(out, ensure_ascii=False)
+
+    def call(payload):  # 在线程池里跑，只做网络请求
+        return json.loads(deepseek_chat(system, payload))["items"]
+
+    batches = [need[i:i + 20] for i in range(0, len(need), 20)]
+    done, fatal = 0, None
+    # 多个请求并发：总调用次数和花费不变，只是更快
+    with ThreadPoolExecutor(max_workers=CLASSIFY_WORKERS) as pool:
+        futures = {pool.submit(call, make_payload(b)): b for b in batches}
+        for fut in as_completed(futures):
+            batch = futures[fut]
+            try:
+                result = fut.result()
+            except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
+                log.error("DeepSeek 返回无法解析: %s", e)
                 continue
-            cat = r.get("category") if r.get("category") in CATEGORIES else "其他"
-            topics = [str(t).strip()[:12] for t in (r.get("topics") or []) if str(t).strip()][:3]
-            con.execute("UPDATE items SET category=?, topics=?, title_zh=?, reason_zh=?, classified_by='llm', classified_at=? "
-                        "WHERE item_key=?", (cat, json.dumps(topics, ensure_ascii=False),
-                                             str(r.get("title_zh") or "")[:80] or None,
-                                             str(r.get("reason_zh") or "")[:160] or None, now_ts(), r["key"]))
-            done += 1
+            except RuntimeError as e:
+                fatal = e
+                for f in futures:
+                    f.cancel()
+                continue
+            valid = {p["key"] for p in batch}
+            for r in result if isinstance(result, list) else []:
+                if not isinstance(r, dict) or r.get("key") not in valid:
+                    continue
+                cat = r.get("category") if r.get("category") in CATEGORIES else "其他"
+                topics = [str(t).strip()[:12] for t in (r.get("topics") or []) if str(t).strip()][:3]
+                con.execute("UPDATE items SET category=?, topics=?, title_zh=?, reason_zh=?, classified_by='llm', classified_at=? "
+                            "WHERE item_key=?", (cat, json.dumps(topics, ensure_ascii=False),
+                                                 str(r.get("title_zh") or "")[:80] or None,
+                                                 str(r.get("reason_zh") or "")[:160] or None, now_ts(), r["key"]))
+                done += 1
+            con.commit()
+            log.info("DeepSeek 已分类 %d/%d", done, len(need))
+    if fatal:
+        log.error("%s；本轮分类暂停", fatal)
+        for p in need:  # 先用规则兜底，网站不至于全是「其他」
+            rules_classify(con, p)
         con.commit()
-        log.info("DeepSeek 已分类 %d/%d", done, len(need))
     return done, f"DeepSeek 分类（{DEEPSEEK_MODEL}）"
 
 

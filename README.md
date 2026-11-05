@@ -46,11 +46,11 @@ bash deploy/install_auto_update.sh
 
 ## 配置（`.env`）
 
-- `MIN_AUTHORS` / `MIN_MONTHS`：筛选门槛，默认都是 3。
+- `MIN_AUTHORS` / `MIN_MONTHS`：筛选门槛，模板里分别是 5 和 3。改完运行 `docker compose up -d` 即可，不用重新抓数据。
 - `INTERVAL_HOURS`：追平历史数据后，多久更新一次。
 - `YOUTUBE_API_KEY`：强烈建议配置。免费额度每天 10000 单位，补 7000 多个视频只用约 150 单位。
 - `DEEPSEEK_API_KEY`：可选，填了就开启 DeepSeek 分类、细分主题、中文标题和推荐理由。
-- `DEEPSEEK_MODEL`：默认 `deepseek-chat`。每批送 20 条，每轮最多处理 300 条，只对新入选的条目调用。
+- `DEEPSEEK_MODEL`：默认 `deepseek-chat`。每批送 20 条，`CLASSIFY_WORKERS`（默认 5）个请求同时发，每轮最多处理 1000 条，只对新入选的条目调用。
 - `SITE_ADDRESS`：默认 `:80`，用服务器 IP 访问。有域名后，把域名解析到这台服务器，再把这一项改成域名，Caddy 会自动申请 HTTPS 证书。
 
 数据保存在 `data/hnpicks.db`（SQLite），网站文件在 `site/`。
